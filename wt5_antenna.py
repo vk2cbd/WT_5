@@ -419,8 +419,9 @@ class WinTrakController:
 class SafeAntenna:
     """Thread-safe high-level antenna wrapper with calibration and limits."""
 
-    def __init__(self, config: AntennaConfig) -> None:
+    def __init__(self, config: AntennaConfig, motion_logger: Optional[Callable[[str, object], None]] = None) -> None:
         self.config = config
+        self.motion_logger = motion_logger
         self.controller = WinTrakController(config.port, baudrate=config.baud, open_delay=config.open_delay)
         self.lock = threading.RLock()
         self.last_position: Optional[Position] = None
@@ -429,6 +430,14 @@ class SafeAntenna:
             self.controller.initialize()
             self.last_position = self.read_position_locked()
             self.config.limits.assert_position_allowed(self.last_position.azimuth, self.last_position.elevation)
+
+    def _motion_event(self, event: str, **fields: object) -> None:
+        if self.motion_logger is None:
+            return
+        try:
+            self.motion_logger(event, fields)
+        except Exception:
+            pass
 
     def close(self) -> None:
         with self.lock:
@@ -522,6 +531,14 @@ class SafeAntenna:
                 raise SafetyError(f"Maximum held-jog time {self.config.limits.max_jog_seconds:0.1f}s reached")
         except Exception as exc:
             self.fault = str(exc)
+            self._motion_event(
+                "SLEW_EXCEPTION",
+                error=str(exc),
+                target_az=target_azimuth,
+                target_el=target_elevation,
+                last_az=self.last_position.azimuth if self.last_position else None,
+                last_el=self.last_position.elevation if self.last_position else None,
+            )
             raise
         finally:
             with self.lock:
@@ -575,6 +592,7 @@ class SafeAntenna:
                 "slow_speed": az_slow_speed,
                 "slow_threshold": az_slow_threshold,
                 "slow": abs(az_error) <= az_slow_threshold,
+                "start_error": az_error,
             }
         if abs(el_error) > el_start_tolerance:
             active[Axis.ELEVATION] = {
@@ -586,11 +604,35 @@ class SafeAntenna:
                 "slow_speed": el_slow_speed,
                 "slow_threshold": el_slow_threshold,
                 "slow": abs(el_error) <= el_slow_threshold,
+                "start_error": el_error,
             }
+        self._motion_event(
+            "SLEW_PLAN",
+            target_az=target_azimuth,
+            target_el=target_elevation,
+            start_az=pos.azimuth,
+            start_el=pos.elevation,
+            start_raw_az=pos.raw_azimuth,
+            start_raw_el=pos.raw_elevation,
+            az_error=az_error,
+            el_error=el_error,
+            az_start_tolerance=az_start_tolerance,
+            el_start_tolerance=el_start_tolerance,
+            az_stop_tolerance=az_stop_tolerance,
+            el_stop_tolerance=el_stop_tolerance,
+            az_fast_speed=az_fast_speed,
+            el_fast_speed=el_fast_speed,
+            az_slow_speed=az_slow_speed,
+            el_slow_speed=el_slow_speed,
+            active_axes=",".join(axis.value for axis in active),
+        )
         if not active:
+            self._motion_event("SLEW_NOOP", reason="within_start_tolerance", az_error=az_error, el_error=el_error)
             return pos
 
         deadline = time.monotonic() + self.config.limits.max_jog_seconds
+        no_progress_seconds = max(2.0, self.config.limits.poll_interval * 5.0)
+        min_progress_degrees = 0.01
         try:
             with self.lock:
                 pos = self.read_position_locked()
@@ -599,6 +641,25 @@ class SafeAntenna:
                     self.config.limits.assert_move_allowed(direction, pos.azimuth, pos.elevation)
                     start_speed = state["slow_speed"] if state["slow"] else state["fast_speed"]
                     self._start_direction(direction, start_speed)
+                    axis = Axis.AZIMUTH if direction in (Direction.AZ_CW, Direction.AZ_CCW) else Axis.ELEVATION
+                    axis_position = pos.azimuth if axis == Axis.AZIMUTH else pos.elevation
+                    now = time.monotonic()
+                    state["last_position"] = axis_position
+                    state["last_progress_position"] = axis_position
+                    state["last_progress_time"] = now
+                    state["last_log_time"] = now
+                    self._motion_event(
+                        "AXIS_START",
+                        axis=axis.value,
+                        direction=direction.value,
+                        speed=start_speed,
+                        slow=bool(state["slow"]),
+                        target=state["target"],
+                        start_position=axis_position,
+                        start_az=pos.azimuth,
+                        start_el=pos.elevation,
+                        start_error=state["start_error"],
+                    )
 
             while active and not stop_event.is_set() and time.monotonic() < deadline:
                 time.sleep(self.config.limits.poll_interval)
@@ -626,7 +687,25 @@ class SafeAntenna:
                                 "slow_speed": az_slow_speed,
                                 "slow_threshold": az_slow_threshold,
                                 "slow": slow,
+                                "start_error": az_error,
+                                "last_position": pos.azimuth,
+                                "last_progress_position": pos.azimuth,
+                                "last_progress_time": time.monotonic(),
+                                "last_log_time": time.monotonic(),
                             }
+                            self._motion_event(
+                                "AXIS_START",
+                                axis=Axis.AZIMUTH.value,
+                                direction=direction.value,
+                                speed=az_slow_speed if slow else az_fast_speed,
+                                slow=slow,
+                                target=target_azimuth,
+                                start_position=pos.azimuth,
+                                start_az=pos.azimuth,
+                                start_el=pos.elevation,
+                                start_error=az_error,
+                                reason="target_callback",
+                            )
                         if Axis.ELEVATION in active:
                             active[Axis.ELEVATION]["target"] = target_elevation
                         elif abs(el_error) > el_start_tolerance:
@@ -643,7 +722,25 @@ class SafeAntenna:
                                 "slow_speed": el_slow_speed,
                                 "slow_threshold": el_slow_threshold,
                                 "slow": slow,
+                                "start_error": el_error,
+                                "last_position": pos.elevation,
+                                "last_progress_position": pos.elevation,
+                                "last_progress_time": time.monotonic(),
+                                "last_log_time": time.monotonic(),
                             }
+                            self._motion_event(
+                                "AXIS_START",
+                                axis=Axis.ELEVATION.value,
+                                direction=direction.value,
+                                speed=el_slow_speed if slow else el_fast_speed,
+                                slow=slow,
+                                target=target_elevation,
+                                start_position=pos.elevation,
+                                start_az=pos.azimuth,
+                                start_el=pos.elevation,
+                                start_error=el_error,
+                                reason="target_callback",
+                            )
                     for axis, state in list(active.items()):
                         direction = state["direction"]
                         self.config.limits.assert_move_allowed(direction, pos.azimuth, pos.elevation)
@@ -656,17 +753,97 @@ class SafeAntenna:
                             if axis == Axis.AZIMUTH
                             else target - pos.elevation
                         )
+                        axis_position = pos.azimuth if axis == Axis.AZIMUTH else pos.elevation
+                        now = time.monotonic()
+                        last_progress_position = float(state.get("last_progress_position", axis_position))
+                        last_progress_time = float(state.get("last_progress_time", now))
+                        last_log_time = float(state.get("last_log_time", now))
+                        position_delta = axis_position - last_progress_position
+                        if axis == Axis.AZIMUTH:
+                            position_delta = shortest_angle_delta(last_progress_position, axis_position)
+                        if abs(position_delta) >= min_progress_degrees:
+                            state["last_progress_position"] = axis_position
+                            state["last_progress_time"] = now
+                        elif now - last_progress_time >= no_progress_seconds:
+                            self._motion_event(
+                                "AXIS_NO_PROGRESS",
+                                axis=axis.value,
+                                direction=direction.value,
+                                target=target,
+                                position=axis_position,
+                                error=error,
+                                seconds_without_progress=now - last_progress_time,
+                                min_progress_degrees=min_progress_degrees,
+                                az=pos.azimuth,
+                                el=pos.elevation,
+                            )
+                            state["last_progress_time"] = now
+                        if now - last_log_time >= 1.0:
+                            self._motion_event(
+                                "AXIS_PROGRESS",
+                                axis=axis.value,
+                                direction=direction.value,
+                                target=target,
+                                position=axis_position,
+                                error=error,
+                                az=pos.azimuth,
+                                el=pos.elevation,
+                                raw_az=pos.raw_azimuth,
+                                raw_el=pos.raw_elevation,
+                            )
+                            state["last_log_time"] = now
                         if _reached_stop_tolerance(error, tolerance, state["direction_sign"]):
                             self._stop_axis(axis)
                             active.pop(axis)
+                            self._motion_event(
+                                "AXIS_STOP",
+                                axis=axis.value,
+                                reason="stop_tolerance",
+                                target=target,
+                                position=axis_position,
+                                error=error,
+                                tolerance=tolerance,
+                                az=pos.azimuth,
+                                el=pos.elevation,
+                            )
                             continue
                         if not state["slow"] and abs(error) <= slow_threshold:
                             self._set_axis_direction_speed(axis, direction, slow_speed)
                             state["slow"] = True
+                            self._motion_event(
+                                "AXIS_SLOW",
+                                axis=axis.value,
+                                direction=direction.value,
+                                speed=slow_speed,
+                                target=target,
+                                position=axis_position,
+                                error=error,
+                                slow_threshold=slow_threshold,
+                            )
                 if update_callback:
                     update_callback(pos)
             if active and not stop_event.is_set():
+                for axis, state in active.items():
+                    self._motion_event(
+                        "AXIS_STOP",
+                        axis=axis.value,
+                        reason="timeout",
+                        target=state.get("target"),
+                        az=pos.azimuth,
+                        el=pos.elevation,
+                        max_jog_seconds=self.config.limits.max_jog_seconds,
+                    )
                 raise SafetyError(f"Slew timed out after {self.config.limits.max_jog_seconds:0.1f}s")
+            if active and stop_event.is_set():
+                for axis, state in active.items():
+                    self._motion_event(
+                        "AXIS_STOP",
+                        axis=axis.value,
+                        reason="external_stop_event",
+                        target=state.get("target"),
+                        az=pos.azimuth,
+                        el=pos.elevation,
+                    )
             return self.read_position()
         except Exception as exc:
             self.fault = str(exc)

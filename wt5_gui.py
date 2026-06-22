@@ -2665,7 +2665,7 @@ class WT5App(tk.Tk):
     def connect_session(self, config) -> SafeAntenna:
         session: Optional[SafeAntenna] = None
         try:
-            session = SafeAntenna(config)
+            session = SafeAntenna(config, motion_logger=lambda event, fields, name=config.name: self.log_motion(name, event, fields))
             session.update_oled("MANUAL", activity="STOPPED")
             return session
         except Exception:
@@ -2675,6 +2675,10 @@ class WT5App(tk.Tk):
                 except Exception:
                     pass
             raise
+
+    def log_motion(self, antenna_name: str, event: str, fields: object) -> None:
+        payload = fields if isinstance(fields, dict) else {"detail": fields}
+        self.event_log.info(f"MOTION_{event}", antenna=antenna_name, **payload)
 
     def connect_sessions_parallel(self, pending: list[tuple[str, AntennaConfig]]) -> tuple[list[tuple[str, SafeAntenna]], list[str]]:
         connected: list[tuple[str, SafeAntenna]] = []
