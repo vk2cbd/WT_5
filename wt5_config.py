@@ -69,11 +69,15 @@ class RtlCalibration:
 RTL_CAL_LEVELS_DBM = tuple(range(-40, -111, -10))
 
 
+def _read_parser(parser: configparser.ConfigParser, path: Path) -> None:
+    parser.read(path, encoding="utf-8-sig")
+
+
 def load_site_config(path: Union[str, Path]) -> SiteConfig:
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     old_tolerance = parser.getfloat("site", "track_tolerance_degrees", fallback=0.10)
     old_slow_speed = parser.getint("site", "slow_speed", fallback=20)
     old_slow_threshold = parser.getfloat("site", "slow_threshold_degrees", fallback=3.0)
@@ -105,7 +109,7 @@ def load_rtl_calibration(path: Union[str, Path], frequency_hz: int, sample_rate_
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     gain_db = normalize_rtl_gain(gain_db)
     section = _rtl_cal_section(frequency_hz, sample_rate_hz, gain_db)
     points: dict[int, float] = {}
@@ -125,7 +129,7 @@ def save_rtl_calibration(path: Union[str, Path], calibration: RtlCalibration) ->
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     section = _rtl_cal_section(calibration.frequency_hz, calibration.sample_rate_hz, calibration.gain_db)
     parser[section] = {
         "frequency_hz": str(int(calibration.frequency_hz)),
@@ -188,7 +192,7 @@ def load_scan_config(path: Union[str, Path]) -> ScanConfig:
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     return ScanConfig(
         span_degrees=parser.getfloat("scan", "span_degrees", fallback=4.0),
         increment_degrees=parser.getfloat("scan", "increment_degrees", fallback=0.5),
@@ -202,7 +206,7 @@ def save_scan_config(path: Union[str, Path], scan: ScanConfig) -> None:
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     parser["scan"] = {
         "span_degrees": f"{scan.span_degrees:.3f}",
         "increment_degrees": f"{scan.increment_degrees:.3f}",
@@ -218,7 +222,7 @@ def load_power_config(path: Union[str, Path]) -> PowerConfig:
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     return PowerConfig(
         center_frequency_hz=parser.getint("power", "center_frequency_hz", fallback=1_200_000_000),
         sample_rate_hz=parser.getint("power", "sample_rate_hz", fallback=1_024_000),
@@ -235,7 +239,7 @@ def save_power_config(path: Union[str, Path], power: PowerConfig) -> None:
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     parser["power"] = {
         "center_frequency_hz": str(int(power.center_frequency_hz)),
         "sample_rate_hz": str(int(power.sample_rate_hz)),
@@ -254,7 +258,7 @@ def save_site_config(path: Union[str, Path], site: SiteConfig) -> None:
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     parser["site"] = _site_section(site)
     with path.open("w", encoding="utf-8") as handle:
         parser.write(handle)
@@ -265,7 +269,7 @@ def load_sources(path: Union[str, Path]) -> dict[str, SourceConfig]:
     parser = configparser.ConfigParser()
     if not path.exists():
         return _default_sources()
-    parser.read(path)
+    _read_parser(parser, path)
 
     sources: dict[str, SourceConfig] = {}
     for section in parser.sections():
@@ -287,7 +291,7 @@ def save_sources(path: Union[str, Path], sources: dict[str, SourceConfig], selec
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     if not parser.has_section("site"):
         parser["site"] = _site_section(SiteConfig(selected_source=selected_source))
     else:
@@ -310,7 +314,7 @@ def load_configs(path: Union[str, Path]) -> dict[str, AntennaConfig]:
     parser = configparser.ConfigParser()
     if not path.exists():
         return {}
-    parser.read(path)
+    _read_parser(parser, path)
 
     configs: dict[str, AntennaConfig] = {}
     for section in parser.sections():
@@ -353,7 +357,7 @@ def save_configs(path: Union[str, Path], configs: dict[str, AntennaConfig]) -> N
     path = Path(path)
     parser = configparser.ConfigParser()
     if path.exists():
-        parser.read(path)
+        _read_parser(parser, path)
     if not parser.has_section("site"):
         parser["site"] = _site_section(SiteConfig())
     for section in list(parser.sections()):
