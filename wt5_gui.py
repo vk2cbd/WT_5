@@ -4133,6 +4133,11 @@ class WT5App(tk.Tk):
         if not self.configs:
             self.status_var.set("No antenna configs loaded.")
             return
+        if not self.sessions:
+            message = "Connect antennas before encoder scan."
+            self.status_var.set(message)
+            messagebox.showerror("Encoders", message, parent=self)
+            return
         EncodersDialog(self)
 
     def update_reference_positions(self) -> None:
