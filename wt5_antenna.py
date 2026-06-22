@@ -632,6 +632,7 @@ class SafeAntenna:
 
         deadline = time.monotonic() + self.config.limits.max_jog_seconds
         no_progress_seconds = max(2.0, self.config.limits.poll_interval * 5.0)
+        no_progress_fault_seconds = max(6.0, self.config.limits.poll_interval * 15.0)
         min_progress_degrees = 0.01
         try:
             with self.lock:
@@ -764,7 +765,12 @@ class SafeAntenna:
                         if abs(position_delta) >= min_progress_degrees:
                             state["last_progress_position"] = axis_position
                             state["last_progress_time"] = now
+                            state["no_progress_since"] = None
                         elif now - last_progress_time >= no_progress_seconds:
+                            no_progress_since = state.get("no_progress_since")
+                            if no_progress_since is None:
+                                no_progress_since = last_progress_time
+                                state["no_progress_since"] = no_progress_since
                             self._motion_event(
                                 "AXIS_NO_PROGRESS",
                                 axis=axis.value,
@@ -773,11 +779,29 @@ class SafeAntenna:
                                 position=axis_position,
                                 error=error,
                                 seconds_without_progress=now - last_progress_time,
+                                seconds_since_first_no_progress=now - float(no_progress_since),
                                 min_progress_degrees=min_progress_degrees,
+                                fault_seconds=no_progress_fault_seconds,
                                 az=pos.azimuth,
                                 el=pos.elevation,
                             )
                             state["last_progress_time"] = now
+                            if now - float(no_progress_since) >= no_progress_fault_seconds:
+                                self._motion_event(
+                                    "AXIS_STOP",
+                                    axis=axis.value,
+                                    reason="no_progress",
+                                    target=target,
+                                    position=axis_position,
+                                    error=error,
+                                    seconds_since_first_no_progress=now - float(no_progress_since),
+                                    az=pos.azimuth,
+                                    el=pos.elevation,
+                                )
+                                raise SafetyError(
+                                    f"{axis.value} no progress for {now - float(no_progress_since):0.1f}s "
+                                    f"while driving {direction.value}; error {error:0.2f} deg"
+                                )
                         if now - last_log_time >= 1.0:
                             self._motion_event(
                                 "AXIS_PROGRESS",
