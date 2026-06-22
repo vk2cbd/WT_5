@@ -279,7 +279,7 @@ class SourcesDialog(tk.Toplevel):
         super().__init__(app)
         self.app = app
         self.title("Sources")
-        self.resizable(False, False)
+        self.resizable(True, False)
         self.transient(app)
         self.grab_set()
         self.sources = {name: SourceConfig(source.name, source.ra_hours, source.dec_degrees, source.flux_4800_mhz) for name, source in app.sources.items()}
@@ -292,7 +292,10 @@ class SourcesDialog(tk.Toplevel):
 
         body = ttk.Frame(self, padding=10)
         body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
         self.tree = ttk.Treeview(body, columns=("source", "ra", "dec", "az", "el", "flux"), show="headings", height=7)
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.heading("source", text="Source")
         self.tree.heading("ra", text="RA h")
         self.tree.heading("dec", text="Dec deg")
@@ -306,10 +309,11 @@ class SourcesDialog(tk.Toplevel):
         self.tree.column("el", width=70, anchor="e")
         self.tree.column("flux", width=90, anchor="e")
         self.tree.grid(row=0, column=0, columnspan=4, sticky="nsew", pady=(0, 8))
+        scrollbar.grid(row=0, column=4, sticky="ns", pady=(0, 8))
         self.tree.bind("<<TreeviewSelect>>", self.load_selected)
 
         fields = ttk.Frame(body)
-        fields.grid(row=1, column=0, columnspan=4, sticky="ew")
+        fields.grid(row=1, column=0, columnspan=5, sticky="ew")
         self._field(fields, "Name", self.name_var, 0, 16)
         self._field(fields, "RA h", self.ra_var, 1, 10)
         self._field(fields, "Dec deg", self.dec_var, 2, 10)
@@ -416,8 +420,11 @@ class SourcesDialog(tk.Toplevel):
         if not selection:
             messagebox.showerror("No Source", "Select a source first.", parent=self)
             return
+        was_tracking_source = self.app.tracking_active and self.app.tracking_kind == "source"
         self.app.site.selected_source = selection[0]
         self.save_to_app(f"Selected source {selection[0]}.")
+        if was_tracking_source:
+            self.app.start_tracking("source")
 
     def close(self) -> None:
         if self.position_after_id is not None:
@@ -2857,9 +2864,9 @@ class WT5App(tk.Tk):
         if self.yfactor_active:
             self.status_var.set("Stop Y Factor before tracking.")
             return
-        if self.tracking_active:
-            self.status_var.set("Tracking already active.")
-            return
+        if self.tracking_active or (self.tracking_thread and self.tracking_thread.is_alive()):
+            if not self.stop_tracking_for_restart(kind):
+                return
         if not self.sessions:
             self.status_var.set("Connect antennas before tracking.")
             return
@@ -2877,6 +2884,23 @@ class WT5App(tk.Tk):
         self.event_log.info("TRACK_START", kind=kind)
         self.tracking_thread = threading.Thread(target=lambda: self.tracking_loop(kind), daemon=True)
         self.tracking_thread.start()
+
+    def stop_tracking_for_restart(self, next_kind: str) -> bool:
+        previous_kind = self.tracking_kind
+        thread = self.tracking_thread
+        self.tracking_stop_event.set()
+        self.status_var.set(f"Switching to {self.kind_label(next_kind)}...")
+        self.event_log.info("TRACK_SWITCH", from_kind=previous_kind, to_kind=next_kind)
+        if thread and thread.is_alive() and threading.current_thread() is not thread:
+            timeout = min(10.0, max(2.0, self.site.track_interval_seconds + 1.0))
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                self.status_var.set("Previous tracking is still stopping; try again in a moment.")
+                self.event_log.warn("TRACK_SWITCH_DEFERRED", from_kind=previous_kind, to_kind=next_kind)
+                return False
+        self.tracking_active = False
+        self.tracking_kind = ""
+        return True
 
     def stop_sun_tracking(self) -> None:
         self.tracking_stop_event.set()
