@@ -1,0 +1,104 @@
+﻿[site]
+latitude = -32.724000
+longitude = 152.130167
+selected_source = Virgo A
+track_interval_seconds = 2.0
+az_track_tolerance_degrees = 0.10
+el_track_tolerance_degrees = 0.10
+az_stop_tolerance_degrees = 0.10
+el_stop_tolerance_degrees = 0.10
+az_slow_speed = 20
+el_slow_speed = 20
+az_slow_threshold_degrees = 3.0
+el_slow_threshold_degrees = 3.0
+log_retention_days = 14
+log_level = INFO
+
+[power]
+center_frequency_hz = 1200000000
+sample_rate_hz = 1024000
+gain_db = 29.7
+frequency_correction_ppm = 0
+samples_per_read = auto
+update_rate_hz = 10.0
+smoothing_samples = 3
+warmup_seconds = 30.0
+
+# Created/updated by RTL Cal. Each section is frequency/sample-rate/gain specific.
+# [rtl_cal:1200000000:1024000:29p7]
+# frequency_hz = 1200000000
+# sample_rate_hz = 1024000
+# gain_db = 29.7
+# dbm_-40 = -12.300
+# dbm_-50 = -22.100
+
+[scan]
+span_degrees = 4.000
+increment_degrees = 0.500
+dwell_seconds = 1.000
+scan_count = 1
+antenna_name = East
+
+[antenna:East]
+port = /dev/ttyUSB0
+baud = 9600
+open_delay = 5
+gui_speed = 40
+az_track_speed = 40
+el_track_speed = 40
+az_low_to_high_compensation = 0.200
+park_az = 355.000
+park_el = 80.000
+
+# Calibration offsets are written by the GUI calibration button.
+az_offset = 0.000000
+el_offset = 0.000000
+
+# Azimuth limit supports wrap-around. 270..265 means allowed range is
+# 270->360 plus 0->265.
+az_min = 270.000
+az_max = 265.000
+el_min = 0.000
+el_max = 87.000
+az_margin = 0.500
+el_margin = 0.500
+max_jog_seconds = 60.000
+poll_interval = 0.200
+
+[source:Virgo A]
+ra_hours = 12.513700
+dec_degrees = 12.391100
+flux_4800_mhz = 70.000
+
+[source:Centaurus A]
+ra_hours = 13.424100
+dec_degrees = -43.019100
+flux_4800_mhz = 650.000
+
+[source:Orion A]
+ra_hours = 5.588100
+dec_degrees = -5.391100
+flux_4800_mhz = 400.000
+
+[antenna:West]
+port = /dev/ttyUSB1
+baud = 9600
+open_delay = 5
+gui_speed = 40
+az_track_speed = 40
+el_track_speed = 40
+az_low_to_high_compensation = 0.500
+park_az = 355.000
+park_el = 80.000
+az_offset = 0.000000
+el_offset = 0.000000
+az_min = 270.000
+az_max = 265.000
+el_min = 0.000
+el_max = 87.000
+az_margin = 0.500
+el_margin = 0.500
+max_jog_seconds = 60.000
+poll_interval = 0.200
+
+
