@@ -2909,6 +2909,9 @@ class WT5App(tk.Tk):
             )
 
     def start_tracking(self, kind: str) -> None:
+        if self.parking_active:
+            self.status_var.set("Stop Park before tracking.")
+            return
         if self.yfactor_active:
             self.status_var.set("Stop Y Factor before tracking.")
             return
@@ -3703,11 +3706,12 @@ class WT5App(tk.Tk):
 
             return worker
 
-        threads = [threading.Thread(target=make_worker(name, session), daemon=True) for name, session in sessions]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        with self.motion_lock:
+            threads = [threading.Thread(target=make_worker(name, session), daemon=True) for name, session in sessions]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
 
         if errors:
             for _name, session in sessions:
