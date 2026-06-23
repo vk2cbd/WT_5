@@ -3958,15 +3958,15 @@ class WT5App(tk.Tk):
         threads: list[threading.Thread] = []
         lock = threading.Lock()
         active_stop_event = stop_event or self.tracking_stop_event
-        active_workers = {"count": 0}
+        primary_slews = {"count": 0}
 
-        def other_workers_active() -> bool:
+        def other_primary_slews_active() -> bool:
             with lock:
-                return active_workers["count"] > 1
+                return primary_slews["count"] > 0
 
-        def mark_worker_done() -> None:
+        def mark_primary_slew_done() -> None:
             with lock:
-                active_workers["count"] = max(0, active_workers["count"] - 1)
+                primary_slews["count"] = max(0, primary_slews["count"] - 1)
 
         def make_worker(name: str, session: SafeAntenna, panel: AntennaPanel):
             activity = self.oled_activity_for_antenna(name, "SLEWING" if show_slewing else "TRACKING")
@@ -3989,6 +3989,7 @@ class WT5App(tk.Tk):
                 return live_target.azimuth, live_target.elevation
 
             def worker() -> None:
+                primary_slew_done = False
                 try:
                     self.events.put(("ok", panel.set_tracking_status, activity))
                     slew_log = self.event_log.info if show_slewing else self.event_log.debug
@@ -4020,9 +4021,11 @@ class WT5App(tk.Tk):
                         progress,
                         live_tracking_target if self.tracking_kind else None,
                     )
+                    mark_primary_slew_done()
+                    primary_slew_done = True
                     while (
                         live_tracking_target
-                        and other_workers_active()
+                        and other_primary_slews_active()
                         and not active_stop_event.is_set()
                         and self.tracking_active
                         and self.tracking_kind
@@ -4094,7 +4097,8 @@ class WT5App(tk.Tk):
                     with lock:
                         errors.append(f"{name}: {exc}")
                 finally:
-                    mark_worker_done()
+                    if not primary_slew_done:
+                        mark_primary_slew_done()
 
             return worker
 
@@ -4105,7 +4109,7 @@ class WT5App(tk.Tk):
                 continue
             workers.append((name, session, panel))
 
-        active_workers["count"] = len(workers)
+        primary_slews["count"] = len(workers)
         for name, session, panel in workers:
             thread = threading.Thread(target=make_worker(name, session, panel), daemon=True)
             threads.append(thread)
