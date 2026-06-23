@@ -1391,6 +1391,7 @@ class AntennaPanel(ttk.Frame):
         self.speed_var = tk.StringVar(value=str(initial_speed))
         self.max_jog_var = tk.StringVar(value=f"{initial_max_jog:0.1f}")
         self.jog_thread_active = False
+        self.manual_jog_active = False
 
         self.columnconfigure(1, weight=1)
         ttk.Label(self, text=name.upper(), font=("TkDefaultFont", 13, "bold")).grid(row=0, column=0, sticky="w")
@@ -1443,8 +1444,8 @@ class AntennaPanel(ttk.Frame):
     def _hold_button(self, master: tk.Misc, text: str, direction: Direction) -> ttk.Button:
         button = ttk.Button(master, text=text)
         button.bind("<ButtonPress-1>", lambda _event: self.start_jog(direction))
-        button.bind("<ButtonRelease-1>", lambda _event: self.stop())
-        button.bind("<Leave>", lambda _event: self.stop())
+        button.bind("<ButtonRelease-1>", lambda _event: self.stop_jog())
+        button.bind("<Leave>", lambda _event: self.stop_jog())
         return button
 
     def attach(self, session: SafeAntenna) -> None:
@@ -1458,6 +1459,7 @@ class AntennaPanel(ttk.Frame):
         self.stop_event.set()
         self.session = None
         self.jog_thread_active = False
+        self.manual_jog_active = False
         self.status_var.set(status)
         self.fault_var.set(message)
         self.clear_position_fields()
@@ -1539,10 +1541,16 @@ class AntennaPanel(ttk.Frame):
     def start_jog(self, direction: Direction) -> None:
         if not self.session or self.jog_thread_active:
             return
+        block_reason = self.app.manual_jog_block_reason()
+        if block_reason:
+            self.app.status_var.set(block_reason)
+            self.app.event_log.warn("MANUAL_JOG_BLOCKED", antenna=self.name, direction=direction.value, reason=block_reason)
+            return
         session = self.session
         self.stop_event.clear()
         speed = self.speed_value
         self.jog_thread_active = True
+        self.manual_jog_active = True
 
         def realtime_update(position: Position) -> None:
             self.queue_position_update(position)
@@ -1569,12 +1577,18 @@ class AntennaPanel(ttk.Frame):
 
     def finish_jog(self, position: Position) -> None:
         self.jog_thread_active = False
+        self.manual_jog_active = False
         self.clear_message()
         self.update_position(position)
 
     def finish_jog_fault(self, text: str) -> None:
         self.jog_thread_active = False
+        self.manual_jog_active = False
         self.set_message(text)
+
+    def stop_jog(self) -> None:
+        if self.manual_jog_active:
+            self.stop_event.set()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -1789,18 +1803,6 @@ class PowerMeterPanel(ttk.LabelFrame):
                 self.status_var.set("Already running")
             else:
                 self.status_var.set("Running but no readings; press Stop Power and wait.")
-            return
-        block_reason = self.app.rtl_power_start_block_reason()
-        if block_reason:
-            self.status_var.set(block_reason)
-            self.app.event_log.warn(
-                "RTL_POWER_START_BLOCKED",
-                reason=block_reason,
-                connecting=self.app.connecting_active,
-                parking=self.app.parking_active,
-                scan=self.app.scan_active,
-                yfactor=self.app.yfactor_active,
-            )
             return
         try:
             power_config = self.power_config_from_fields()
@@ -2656,15 +2658,17 @@ class WT5App(tk.Tk):
         self.update_reference_positions()
         self.after(1500, self.periodic_refresh)
 
-    def rtl_power_start_block_reason(self) -> str:
+    def manual_jog_block_reason(self) -> str:
         if self.connecting_active:
-            return "Wait for connection to finish before starting RTL power."
+            return "Wait for connection to finish before manual jog."
         if self.parking_active:
-            return "Wait for Park to finish before starting RTL power."
+            return "Stop Park before manual jog."
         if self.scan_active:
-            return "Stop Scan Cal before starting RTL power."
+            return "Stop Scan Cal before manual jog."
         if self.yfactor_active:
-            return "Stop Y Factor before starting RTL power."
+            return "Stop Y Factor before manual jog."
+        if self.tracking_active:
+            return "Stop tracking before manual jog."
         return ""
 
     def connect_all(self) -> None:
