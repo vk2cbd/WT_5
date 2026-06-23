@@ -2705,7 +2705,17 @@ class WT5App(tk.Tk):
 
     def log_motion(self, antenna_name: str, event: str, fields: object) -> None:
         payload = fields if isinstance(fields, dict) else {"detail": fields}
-        self.event_log.info(f"MOTION_{event}", antenna=antenna_name, **payload)
+        event_name = f"MOTION_{event}"
+        if event == "SLEW_EXCEPTION":
+            self.event_log.error(event_name, antenna=antenna_name, **payload)
+            return
+        if event == "AXIS_NO_PROGRESS":
+            self.event_log.warn(event_name, antenna=antenna_name, **payload)
+            return
+        if event == "AXIS_STOP" and payload.get("reason") in {"no_progress", "timeout", "external_stop_event"}:
+            self.event_log.warn(event_name, antenna=antenna_name, **payload)
+            return
+        self.event_log.debug(event_name, antenna=antenna_name, **payload)
 
     def connect_sessions_parallel(self, pending: list[tuple[str, AntennaConfig]]) -> tuple[list[tuple[str, SafeAntenna]], list[str]]:
         connected: list[tuple[str, SafeAntenna]] = []
@@ -3089,7 +3099,7 @@ class WT5App(tk.Tk):
                         )
                     )
                     self.events.put(("ok", self.set_status, f"{config.antenna_name} {axis_label(axis)} scan offset {offset:+0.2f} deg."))
-                    self.event_log.info(
+                    self.event_log.debug(
                         "SCAN_POINT",
                         antenna=config.antenna_name,
                         axis=axis_label(axis),
@@ -3442,7 +3452,7 @@ class WT5App(tk.Tk):
                             }
                         )
                         handle.flush()
-                        self.event_log.info(
+                        self.event_log.debug(
                             "YFACTOR_POINT",
                             antenna=antenna_name,
                             index=index,
@@ -3961,7 +3971,8 @@ class WT5App(tk.Tk):
             def worker() -> None:
                 try:
                     self.events.put(("ok", panel.set_tracking_status, activity))
-                    self.event_log.info(
+                    slew_log = self.event_log.info if show_slewing else self.event_log.debug
+                    slew_log(
                         "SLEW_START",
                         antenna=name,
                         mode=mode,
@@ -3997,7 +4008,7 @@ class WT5App(tk.Tk):
                     session.update_oled(mode, effective_target.azimuth, effective_target.elevation, final_activity)
                     self.events.put(("position", panel.update_position, position))
                     self.events.put(("ok", panel.set_tracking_status, final_activity))
-                    self.event_log.info(
+                    slew_log(
                         "SLEW_END",
                         antenna=name,
                         mode=mode,
