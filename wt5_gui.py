@@ -3958,15 +3958,35 @@ class WT5App(tk.Tk):
         threads: list[threading.Thread] = []
         lock = threading.Lock()
         active_stop_event = stop_event or self.tracking_stop_event
+        active_workers = {"count": 0}
+
+        def other_workers_active() -> bool:
+            with lock:
+                return active_workers["count"] > 1
+
+        def mark_worker_done() -> None:
+            with lock:
+                active_workers["count"] = max(0, active_workers["count"] - 1)
 
         def make_worker(name: str, session: SafeAntenna, panel: AntennaPanel):
             activity = self.oled_activity_for_antenna(name, "SLEWING" if show_slewing else "TRACKING")
             effective_target = self.apply_scan_offset(target, name)
             effective_target = self.apply_az_low_to_high_compensation(name, session, effective_target)
+            current_effective_target = {"target": effective_target}
 
             def progress(position: Position) -> None:
                 self.events.put(("position", panel.update_position, position))
-                session.update_oled_position(effective_target.azimuth, effective_target.elevation, activity)
+                display_target = current_effective_target["target"]
+                session.update_oled_position(display_target.azimuth, display_target.elevation, activity)
+
+            def live_tracking_target(position: Position) -> tuple[float, float]:
+                if not self.tracking_active or not self.tracking_kind:
+                    return effective_target.azimuth, effective_target.elevation
+                live_target = self.current_tracking_target(self.tracking_kind)
+                live_target = self.apply_scan_offset(live_target, name)
+                live_target = self.apply_az_low_to_high_compensation(name, session, live_target)
+                current_effective_target["target"] = live_target
+                return live_target.azimuth, live_target.elevation
 
             def worker() -> None:
                 try:
@@ -3998,14 +4018,44 @@ class WT5App(tk.Tk):
                         self.site.az_slow_threshold_degrees,
                         self.site.el_slow_threshold_degrees,
                         progress,
+                        live_tracking_target if self.tracking_kind else None,
                     )
+                    while (
+                        live_tracking_target
+                        and other_workers_active()
+                        and not active_stop_event.is_set()
+                        and self.tracking_active
+                        and self.tracking_kind
+                    ):
+                        position = session.read_position()
+                        live_azimuth, live_elevation = live_tracking_target(position)
+                        position = session.guarded_slew_to(
+                            live_azimuth,
+                            live_elevation,
+                            session.config.az_track_speed,
+                            session.config.el_track_speed,
+                            active_stop_event,
+                            self.az_tracking_start_tolerance(),
+                            self.el_tracking_start_tolerance(),
+                            self.az_tracking_stop_tolerance(),
+                            self.el_tracking_stop_tolerance(),
+                            self.site.az_slow_speed,
+                            self.site.el_slow_speed,
+                            self.site.az_slow_threshold_degrees,
+                            self.site.el_slow_threshold_degrees,
+                            progress,
+                            live_tracking_target,
+                        )
+                        if active_stop_event.wait(max(0.1, min(1.0, self.site.track_interval_seconds))):
+                            break
+                    final_target = current_effective_target["target"]
                     if active_stop_event.is_set():
-                        session.update_oled(mode, effective_target.azimuth, effective_target.elevation, "STOPPED")
+                        session.update_oled(mode, final_target.azimuth, final_target.elevation, "STOPPED")
                         self.events.put(("position", panel.update_position, position))
                         self.events.put(("ok", panel.set_tracking_status, "STOPPED"))
                         return
                     final_activity = self.oled_activity_for_antenna(name, "TRACKING")
-                    session.update_oled(mode, effective_target.azimuth, effective_target.elevation, final_activity)
+                    session.update_oled(mode, final_target.azimuth, final_target.elevation, final_activity)
                     self.events.put(("position", panel.update_position, position))
                     self.events.put(("ok", panel.set_tracking_status, final_activity))
                     slew_log(
@@ -4015,15 +4065,16 @@ class WT5App(tk.Tk):
                         activity=final_activity,
                         az=position.azimuth,
                         el=position.elevation,
-                        target_az=effective_target.azimuth,
-                        target_el=effective_target.elevation,
+                        target_az=final_target.azimuth,
+                        target_el=final_target.elevation,
                     )
                 except SafetyError as exc:
                     self.event_log.error("SLEW_SAFETY_STOP", antenna=name, mode=mode, error=str(exc))
                     try:
                         session.stop_all()
                         position = session.read_position()
-                        session.update_oled(mode, effective_target.azimuth, effective_target.elevation, "STOPPED")
+                        fault_target = current_effective_target["target"]
+                        session.update_oled(mode, fault_target.azimuth, fault_target.elevation, "STOPPED")
                         self.events.put(("position", panel.update_position, position))
                         self.events.put(("error", panel.set_fault, str(exc)))
                     except Exception as comm_exc:
@@ -4042,13 +4093,20 @@ class WT5App(tk.Tk):
                     self.events.put(("ok", self.handle_controller_fault_event, (name, str(exc))))
                     with lock:
                         errors.append(f"{name}: {exc}")
+                finally:
+                    mark_worker_done()
 
             return worker
 
+        workers: list[tuple[str, SafeAntenna, AntennaPanel]] = []
         for name, session in list(self.sessions.items()):
             panel = self.panels.get(name)
             if not panel:
                 continue
+            workers.append((name, session, panel))
+
+        active_workers["count"] = len(workers)
+        for name, session, panel in workers:
             thread = threading.Thread(target=make_worker(name, session, panel), daemon=True)
             threads.append(thread)
             thread.start()
