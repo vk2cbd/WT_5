@@ -2906,6 +2906,27 @@ class WT5App(tk.Tk):
         self.tracking_kind = ""
         return True
 
+    def stop_tracking_before_park(self) -> bool:
+        previous_kind = self.tracking_kind
+        thread = self.tracking_thread
+        if not self.tracking_active and not (thread and thread.is_alive()):
+            return True
+
+        self.tracking_stop_event.set()
+        self.status_var.set("Stopping tracking before parking...")
+        self.event_log.info("PARK_STOP_TRACKING", from_kind=previous_kind)
+        if thread and thread.is_alive() and threading.current_thread() is not thread:
+            max_jog = max((session.config.limits.max_jog_seconds for session in self.sessions.values()), default=60.0)
+            timeout = min(15.0, max(3.0, self.site.track_interval_seconds + max_jog * 0.1))
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                self.status_var.set("Tracking is still stopping; try Park again in a moment.")
+                self.event_log.warn("PARK_DEFERRED", reason="tracking_thread_alive", from_kind=previous_kind)
+                return False
+        self.tracking_active = False
+        self.tracking_kind = ""
+        return True
+
     def stop_sun_tracking(self) -> None:
         self.tracking_stop_event.set()
         self.tracking_active = False
@@ -3564,11 +3585,16 @@ class WT5App(tk.Tk):
             self.status_var.set(f"Park position invalid: {exc}")
             return
 
-        self.tracking_stop_event.set()
-        self.tracking_active = False
+        if not self.stop_tracking_before_park():
+            return
         self.park_stop_event.clear()
         self.parking_active = True
         self.status_var.set("Parking antennas...")
+        self.event_log.info(
+            "PARK_START",
+            antennas=list(self.sessions),
+            targets={name: {"az": session.config.park_az, "el": session.config.park_el} for name, session in self.sessions.items()},
+        )
         threading.Thread(target=self.park_worker, daemon=True).start()
 
     def park_worker(self) -> None:
@@ -3652,6 +3678,7 @@ class WT5App(tk.Tk):
         self.parking_active = False
         self.park_stop_event.clear()
         self.status_var.set("Parked and disconnected.")
+        self.event_log.info("PARK_SUCCESS", antennas=names)
 
     def finish_park_fault(self, message: str) -> None:
         self.parking_active = False
@@ -3660,6 +3687,7 @@ class WT5App(tk.Tk):
             if panel.session and panel.status_var.get() == "PARKING":
                 panel.status_var.set("STOPPED")
         self.status_var.set(f"Park fault: {message}")
+        self.event_log.error("PARK_FAULT", error=message)
 
     def tracking_loop(self, kind: str) -> None:
         acquired = False
