@@ -2760,6 +2760,13 @@ class WT5App(tk.Tk):
         if not self.sessions:
             self.status_var.set("Already disconnected.")
             return
+        if not self.stop_tracking_for_operation(
+            "disconnecting",
+            "Disconnecting",
+            "DISCONNECT",
+            "Tracking is still stopping; try Disconnect again in a moment.",
+        ):
+            return
         for panel in self.panels.values():
             panel.stop_event.set()
         self.event_log.info("DISCONNECT_START", antennas=list(self.sessions))
@@ -2906,26 +2913,40 @@ class WT5App(tk.Tk):
         self.tracking_kind = ""
         return True
 
-    def stop_tracking_before_park(self) -> bool:
+    def stop_tracking_for_operation(
+        self,
+        action_text: str,
+        event_action: str,
+        event_prefix: str,
+        deferred_message: str,
+    ) -> bool:
         previous_kind = self.tracking_kind
         thread = self.tracking_thread
         if not self.tracking_active and not (thread and thread.is_alive()):
             return True
 
         self.tracking_stop_event.set()
-        self.status_var.set("Stopping tracking before parking...")
-        self.event_log.info("PARK_STOP_TRACKING", from_kind=previous_kind)
+        self.status_var.set(f"Stopping tracking before {action_text}...")
+        self.event_log.info(f"{event_prefix}_STOP_TRACKING", from_kind=previous_kind, action=event_action)
         if thread and thread.is_alive() and threading.current_thread() is not thread:
             max_jog = max((session.config.limits.max_jog_seconds for session in self.sessions.values()), default=60.0)
             timeout = min(15.0, max(3.0, self.site.track_interval_seconds + max_jog * 0.1))
             thread.join(timeout=timeout)
             if thread.is_alive():
-                self.status_var.set("Tracking is still stopping; try Park again in a moment.")
-                self.event_log.warn("PARK_DEFERRED", reason="tracking_thread_alive", from_kind=previous_kind)
+                self.status_var.set(deferred_message)
+                self.event_log.warn(f"{event_prefix}_DEFERRED", reason="tracking_thread_alive", from_kind=previous_kind)
                 return False
         self.tracking_active = False
         self.tracking_kind = ""
         return True
+
+    def stop_tracking_before_park(self) -> bool:
+        return self.stop_tracking_for_operation(
+            "parking",
+            "Parking",
+            "PARK",
+            "Tracking is still stopping; try Park again in a moment.",
+        )
 
     def stop_sun_tracking(self) -> None:
         self.tracking_stop_event.set()
