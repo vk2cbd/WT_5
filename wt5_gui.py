@@ -1790,6 +1790,18 @@ class PowerMeterPanel(ttk.LabelFrame):
             else:
                 self.status_var.set("Running but no readings; press Stop Power and wait.")
             return
+        block_reason = self.app.rtl_power_start_block_reason()
+        if block_reason:
+            self.status_var.set(block_reason)
+            self.app.event_log.warn(
+                "RTL_POWER_START_BLOCKED",
+                reason=block_reason,
+                connecting=self.app.connecting_active,
+                parking=self.app.parking_active,
+                scan=self.app.scan_active,
+                yfactor=self.app.yfactor_active,
+            )
+            return
         try:
             power_config = self.power_config_from_fields()
             config = self.meter_config_from_fields()
@@ -2643,6 +2655,17 @@ class WT5App(tk.Tk):
         self.after(100, self.process_events)
         self.update_reference_positions()
         self.after(1500, self.periodic_refresh)
+
+    def rtl_power_start_block_reason(self) -> str:
+        if self.connecting_active:
+            return "Wait for connection to finish before starting RTL power."
+        if self.parking_active:
+            return "Wait for Park to finish before starting RTL power."
+        if self.scan_active:
+            return "Stop Scan Cal before starting RTL power."
+        if self.yfactor_active:
+            return "Stop Y Factor before starting RTL power."
+        return ""
 
     def connect_all(self) -> None:
         if self.connecting_active:
