@@ -2633,6 +2633,7 @@ class WT5App(tk.Tk):
         self.target_az_var = tk.StringVar(value="AZ --")
         self.target_el_var = tk.StringVar(value="EL --")
         self.target_ha_var = tk.StringVar(value="HA --")
+        self.timeout_var = tk.StringVar(value="Timeout off")
         self.sun_ref_var = tk.StringVar(value="Sun AZ -- EL --")
         self.moon_ref_var = tk.StringVar(value="Moon AZ -- EL --")
         self.local_time_var = tk.StringVar(value="Local --")
@@ -2679,6 +2680,7 @@ class WT5App(tk.Tk):
         target_detail_bar = ttk.Frame(self, padding=(8, 0, 8, 2))
         target_detail_bar.pack(fill="x")
         ttk.Label(target_detail_bar, textvariable=self.target_ha_var).pack(side="left")
+        ttk.Label(target_detail_bar, textvariable=self.timeout_var).pack(side="left", padx=(16, 0))
 
         body = ttk.Frame(self, padding=8)
         body.pack(fill="both", expand=True)
@@ -4515,7 +4517,19 @@ class WT5App(tk.Tk):
         self.status_var.set(f"Timeout disconnect fault: {message}")
         self.event_log.error("APP_TIMEOUT_DISCONNECT_FAULT", error=message)
 
+    def update_timeout_display(self) -> None:
+        if not self.site.timeout_enabled:
+            self.timeout_var.set("Timeout off")
+            return
+        timeout_seconds = max(60.0, self.site.timeout_minutes * 60.0)
+        remaining = max(0.0, timeout_seconds - (time.monotonic() - self.last_user_activity))
+        total_seconds = int(math.ceil(remaining))
+        minutes, seconds = divmod(total_seconds, 60)
+        action = "park" if self.site.timeout_action == "park_disconnect" else "disconnect"
+        self.timeout_var.set(f"Timeout {minutes:02d}:{seconds:02d} to {action}")
+
     def periodic_refresh(self) -> None:
+        self.update_timeout_display()
         self.check_app_timeout()
         if not self.tracking_active and not self.parking_active and not self.scan_active and not self.yfactor_active:
             self.refresh_all()
