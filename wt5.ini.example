@@ -13,6 +13,9 @@ az_slow_threshold_degrees = 3.0
 el_slow_threshold_degrees = 3.0
 log_retention_days = 14
 log_level = INFO
+timeout_enabled = no
+timeout_minutes = 60.0
+timeout_action = disconnect
 
 [power]
 center_frequency_hz = 1200000000
@@ -38,6 +41,17 @@ increment_degrees = 0.500
 dwell_seconds = 1.000
 scan_count = 1
 antenna_name = East
+
+[yfactor]
+antenna_name = East
+hot_target = Sun
+cold_mode = Sun AZ / EL 80
+cold_az = 0.000
+cold_el = 80.000
+cold_ra = 0.000000
+cold_dec = 0.000
+count = 3
+dwell_seconds = 5.000
 
 [antenna:East]
 port = /dev/ttyUSB0

@@ -35,6 +35,9 @@ class SiteConfig:
     el_slow_threshold_degrees: float = 3.0
     log_retention_days: int = 14
     log_level: str = "INFO"
+    timeout_enabled: bool = False
+    timeout_minutes: float = 60.0
+    timeout_action: str = "disconnect"
 
 
 @dataclass
@@ -56,6 +59,19 @@ class ScanConfig:
     dwell_seconds: float = 1.0
     scan_count: int = 1
     antenna_name: str = ""
+
+
+@dataclass
+class YFactorConfig:
+    antenna_name: str = ""
+    hot_target: str = "Sun"
+    cold_mode: str = "Sun AZ / EL 80"
+    cold_az: float = 0.0
+    cold_el: float = 80.0
+    cold_ra: float = 0.0
+    cold_dec: float = 0.0
+    count: int = 3
+    dwell_seconds: float = 5.0
 
 
 @dataclass
@@ -83,6 +99,9 @@ def load_site_config(path: Union[str, Path]) -> SiteConfig:
     old_slow_threshold = parser.getfloat("site", "slow_threshold_degrees", fallback=3.0)
     az_start_tolerance = parser.getfloat("site", "az_track_tolerance_degrees", fallback=old_tolerance)
     el_start_tolerance = parser.getfloat("site", "el_track_tolerance_degrees", fallback=old_tolerance)
+    timeout_action = parser.get("site", "timeout_action", fallback="disconnect").strip() or "disconnect"
+    if timeout_action not in ("disconnect", "park_disconnect"):
+        timeout_action = "disconnect"
     return SiteConfig(
         latitude=parser.getfloat("site", "latitude", fallback=-32.724000),
         longitude=parser.getfloat("site", "longitude", fallback=152.130167),
@@ -102,6 +121,9 @@ def load_site_config(path: Union[str, Path]) -> SiteConfig:
         el_slow_threshold_degrees=parser.getfloat("site", "el_slow_threshold_degrees", fallback=old_slow_threshold),
         log_retention_days=parser.getint("site", "log_retention_days", fallback=14),
         log_level=parser.get("site", "log_level", fallback="INFO").strip().upper() or "INFO",
+        timeout_enabled=parser.getboolean("site", "timeout_enabled", fallback=False),
+        timeout_minutes=parser.getfloat("site", "timeout_minutes", fallback=60.0),
+        timeout_action=timeout_action,
     )
 
 
@@ -213,6 +235,44 @@ def save_scan_config(path: Union[str, Path], scan: ScanConfig) -> None:
         "dwell_seconds": f"{scan.dwell_seconds:.3f}",
         "scan_count": str(max(1, int(scan.scan_count))),
         "antenna_name": scan.antenna_name,
+    }
+    with path.open("w", encoding="utf-8") as handle:
+        parser.write(handle)
+
+
+def load_yfactor_config(path: Union[str, Path]) -> YFactorConfig:
+    path = Path(path)
+    parser = configparser.ConfigParser()
+    if path.exists():
+        _read_parser(parser, path)
+    return YFactorConfig(
+        antenna_name=parser.get("yfactor", "antenna_name", fallback="").strip(),
+        hot_target=parser.get("yfactor", "hot_target", fallback="Sun").strip() or "Sun",
+        cold_mode=parser.get("yfactor", "cold_mode", fallback="Sun AZ / EL 80").strip() or "Sun AZ / EL 80",
+        cold_az=parser.getfloat("yfactor", "cold_az", fallback=0.0),
+        cold_el=parser.getfloat("yfactor", "cold_el", fallback=80.0),
+        cold_ra=parser.getfloat("yfactor", "cold_ra", fallback=0.0),
+        cold_dec=parser.getfloat("yfactor", "cold_dec", fallback=0.0),
+        count=parser.getint("yfactor", "count", fallback=3),
+        dwell_seconds=parser.getfloat("yfactor", "dwell_seconds", fallback=5.0),
+    )
+
+
+def save_yfactor_config(path: Union[str, Path], config: YFactorConfig) -> None:
+    path = Path(path)
+    parser = configparser.ConfigParser()
+    if path.exists():
+        _read_parser(parser, path)
+    parser["yfactor"] = {
+        "antenna_name": config.antenna_name,
+        "hot_target": config.hot_target,
+        "cold_mode": config.cold_mode,
+        "cold_az": f"{config.cold_az:.3f}",
+        "cold_el": f"{config.cold_el:.3f}",
+        "cold_ra": f"{config.cold_ra:.6f}",
+        "cold_dec": f"{config.cold_dec:.3f}",
+        "count": str(max(1, int(config.count))),
+        "dwell_seconds": f"{config.dwell_seconds:.3f}",
     }
     with path.open("w", encoding="utf-8") as handle:
         parser.write(handle)
@@ -406,6 +466,9 @@ def _site_section(site: SiteConfig) -> dict[str, str]:
         "el_slow_threshold_degrees": f"{site.el_slow_threshold_degrees:.1f}",
         "log_retention_days": str(max(1, int(site.log_retention_days))),
         "log_level": site.log_level.upper(),
+        "timeout_enabled": "yes" if site.timeout_enabled else "no",
+        "timeout_minutes": f"{site.timeout_minutes:.1f}",
+        "timeout_action": site.timeout_action,
     }
 
 

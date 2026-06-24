@@ -23,6 +23,7 @@ from wt5_config import (
     ScanConfig,
     SiteConfig,
     SourceConfig,
+    YFactorConfig,
     calibrated_dbm_from_dbfs,
     load_configs,
     load_power_config,
@@ -30,6 +31,7 @@ from wt5_config import (
     load_scan_config,
     load_site_config,
     load_sources,
+    load_yfactor_config,
     normalize_rtl_gain,
     save_configs,
     save_power_config,
@@ -37,6 +39,7 @@ from wt5_config import (
     save_scan_config,
     save_site_config,
     save_sources,
+    save_yfactor_config,
 )
 from wt5_antenna import AntennaConfig, Axis, Direction, EncoderInfo, Position, SafeAntenna, SafetyError, shortest_angle_delta
 from wt5_logging import EventLogger
@@ -261,6 +264,9 @@ class ObserverDialog(tk.Toplevel):
                 el_slow_threshold_degrees=self.app.site.el_slow_threshold_degrees,
                 log_retention_days=self.app.site.log_retention_days,
                 log_level=self.app.site.log_level,
+                timeout_enabled=self.app.site.timeout_enabled,
+                timeout_minutes=self.app.site.timeout_minutes,
+                timeout_action=self.app.site.timeout_action,
             )
             self.app.validate_observer(site)
         except ValueError:
@@ -1215,6 +1221,9 @@ class TrackingDialog(tk.Toplevel):
         self.el_slow_speed_var = tk.StringVar(value=str(app.site.el_slow_speed))
         self.az_slow_threshold_var = tk.StringVar(value=f"{app.site.az_slow_threshold_degrees:0.1f}")
         self.el_slow_threshold_var = tk.StringVar(value=f"{app.site.el_slow_threshold_degrees:0.1f}")
+        self.timeout_enabled_var = tk.BooleanVar(value=app.site.timeout_enabled)
+        self.timeout_minutes_var = tk.StringVar(value=f"{app.site.timeout_minutes:0.1f}")
+        self.timeout_action_var = tk.StringVar(value=app.site.timeout_action)
 
         body = ttk.Frame(self, padding=10)
         body.grid(row=0, column=0, sticky="nsew")
@@ -1239,12 +1248,24 @@ class TrackingDialog(tk.Toplevel):
         ttk.Entry(body, textvariable=self.el_slow_threshold_var, width=7).grid(row=5, column=4, sticky="w", pady=2)
 
         ttk.Separator(body, orient="horizontal").grid(row=6, column=0, columnspan=5, sticky="ew", pady=8)
-        ttk.Label(body, text="Antenna").grid(row=7, column=0, sticky="w")
-        ttk.Label(body, text="AZ speed").grid(row=7, column=1, sticky="w")
-        ttk.Label(body, text="EL speed").grid(row=7, column=2, sticky="w")
-        ttk.Label(body, text="Max jog").grid(row=7, column=3, sticky="w")
-        ttk.Label(body, text="AZ L->H comp").grid(row=7, column=4, sticky="w")
-        for row, (name, config) in enumerate(self.app.configs.items(), start=8):
+        ttk.Checkbutton(body, text="Timeout", variable=self.timeout_enabled_var).grid(row=7, column=0, sticky="w", pady=2)
+        self._spin_only(body, self.timeout_minutes_var, 7, 1, 1.0, 1440.0, 1.0, width=7)
+        ttk.Label(body, text="minutes").grid(row=7, column=2, sticky="w", pady=2)
+        ttk.Combobox(
+            body,
+            textvariable=self.timeout_action_var,
+            values=("disconnect", "park_disconnect"),
+            width=16,
+            state="readonly",
+        ).grid(row=7, column=3, columnspan=2, sticky="w", pady=2)
+
+        ttk.Separator(body, orient="horizontal").grid(row=8, column=0, columnspan=5, sticky="ew", pady=8)
+        ttk.Label(body, text="Antenna").grid(row=9, column=0, sticky="w")
+        ttk.Label(body, text="AZ speed").grid(row=9, column=1, sticky="w")
+        ttk.Label(body, text="EL speed").grid(row=9, column=2, sticky="w")
+        ttk.Label(body, text="Max jog").grid(row=9, column=3, sticky="w")
+        ttk.Label(body, text="AZ L->H comp").grid(row=9, column=4, sticky="w")
+        for row, (name, config) in enumerate(self.app.configs.items(), start=10):
             self.az_speed_vars[name] = tk.StringVar(value=str(config.az_track_speed))
             self.el_speed_vars[name] = tk.StringVar(value=str(config.el_track_speed))
             self.max_jog_vars[name] = tk.StringVar(value=f"{config.limits.max_jog_seconds:0.0f}")
@@ -1325,6 +1346,9 @@ class TrackingDialog(tk.Toplevel):
                 el_slow_threshold_degrees=round(float(self.el_slow_threshold_var.get()), 1),
                 log_retention_days=int(float(self.log_retention_var.get())),
                 log_level=self.app.site.log_level,
+                timeout_enabled=bool(self.timeout_enabled_var.get()),
+                timeout_minutes=round(float(self.timeout_minutes_var.get()), 1),
+                timeout_action=self.timeout_action_var.get(),
             )
             self.app.validate_site(site)
             antenna_values = {
@@ -2453,15 +2477,17 @@ class YFactorDialog(tk.Toplevel):
         self.transient(app)
         self.grab_set()
         antenna_names = list(app.configs) or list(app.panels)
-        self.antenna_var = tk.StringVar(value=antenna_names[0] if antenna_names else "")
-        self.target_var = tk.StringVar(value="Sun")
-        self.cold_mode_var = tk.StringVar(value="Sun AZ / EL 80")
-        self.cold_az_var = tk.StringVar(value="0.0")
-        self.cold_el_var = tk.StringVar(value="80.0")
-        self.cold_ra_var = tk.StringVar(value="0.0000")
-        self.cold_dec_var = tk.StringVar(value="0.0")
-        self.count_var = tk.StringVar(value="3")
-        self.dwell_var = tk.StringVar(value="5.0")
+        config = app.yfactor_config
+        antenna_name = config.antenna_name if config.antenna_name in antenna_names else (antenna_names[0] if antenna_names else "")
+        self.antenna_var = tk.StringVar(value=antenna_name)
+        self.target_var = tk.StringVar(value=config.hot_target if config.hot_target in ("Sun", "Moon", "Source") else "Sun")
+        self.cold_mode_var = tk.StringVar(value=config.cold_mode)
+        self.cold_az_var = tk.StringVar(value=f"{config.cold_az:0.1f}")
+        self.cold_el_var = tk.StringVar(value=f"{config.cold_el:0.1f}")
+        self.cold_ra_var = tk.StringVar(value=f"{config.cold_ra:0.4f}")
+        self.cold_dec_var = tk.StringVar(value=f"{config.cold_dec:0.1f}")
+        self.count_var = tk.StringVar(value=str(config.count))
+        self.dwell_var = tk.StringVar(value=f"{config.dwell_seconds:0.1f}")
         self.status_var = tk.StringVar(value="Start RTL power before measuring.")
 
         body = ttk.Frame(self, padding=10)
@@ -2497,11 +2523,22 @@ class YFactorDialog(tk.Toplevel):
         ttk.Button(buttons, text="Start", command=self.start).pack(side="left")
         ttk.Button(buttons, text="Stop", command=app.stop_yfactor).pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        self.target_var.trace_add("write", self.on_hot_target_changed)
+        self.on_hot_target_changed()
         self.protocol("WM_DELETE_WINDOW", self.close)
 
     def _entry(self, parent: tk.Misc, label: str, variable: tk.StringVar, row: int) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=2)
         ttk.Entry(parent, textvariable=variable, width=12).grid(row=row, column=1, sticky="w", pady=2)
+
+    def on_hot_target_changed(self, *_args) -> None:
+        current_cold = self.cold_mode_var.get()
+        if current_cold not in ("Sun AZ / EL 80", "Moon AZ / EL 80"):
+            return
+        if self.target_var.get() == "Sun":
+            self.cold_mode_var.set("Sun AZ / EL 80")
+        elif self.target_var.get() == "Moon":
+            self.cold_mode_var.set("Moon AZ / EL 80")
 
     def start(self) -> None:
         try:
@@ -2514,6 +2551,18 @@ class YFactorDialog(tk.Toplevel):
         except ValueError:
             self.status_var.set("Y Factor fields must be numeric.")
             return
+        self.app.yfactor_config = YFactorConfig(
+            antenna_name=self.antenna_var.get().strip(),
+            hot_target=self.target_var.get(),
+            cold_mode=self.cold_mode_var.get(),
+            cold_az=cold_az,
+            cold_el=cold_el,
+            cold_ra=cold_ra,
+            cold_dec=cold_dec,
+            count=count,
+            dwell_seconds=dwell,
+        )
+        save_yfactor_config(self.app.config_path, self.app.yfactor_config)
         self.app.start_yfactor(
             dialog=self,
             antenna_name=self.antenna_var.get().strip(),
@@ -2549,6 +2598,7 @@ class WT5App(tk.Tk):
         self.sources = load_sources(config_path)
         self.power_config = load_power_config(config_path)
         self.scan_config = load_scan_config(config_path)
+        self.yfactor_config = load_yfactor_config(config_path)
         self.event_log = EventLogger(Path(config_path).parent, self.site.log_retention_days, self.site.log_level)
         self.event_log.info("APP_START", version=APP_VERSION, config=str(config_path))
         self.sessions: dict[str, SafeAntenna] = {}
@@ -2572,6 +2622,8 @@ class WT5App(tk.Tk):
         self.scan_active = False
         self.yfactor_active = False
         self.yfactor_target_label = ""
+        self.timeout_in_progress = False
+        self.last_user_activity = time.monotonic()
         self.scan_antenna_name = ""
         self.scan_axis: Optional[Axis] = None
         self.scan_offset_degrees = 0.0
@@ -2654,9 +2706,16 @@ class WT5App(tk.Tk):
         if not self.configs:
             self.status_var.set(f"No antennas found in {config_path}. Copy WT5.ini.example to WT5.ini.")
 
+        self.bind_all("<Button>", self.note_user_activity, add="+")
+        self.bind_all("<Key>", self.note_user_activity, add="+")
         self.after(100, self.process_events)
         self.update_reference_positions()
         self.after(1500, self.periodic_refresh)
+
+    def note_user_activity(self, _event=None) -> None:
+        self.last_user_activity = time.monotonic()
+        if not self.sessions:
+            self.timeout_in_progress = False
 
     def manual_jog_block_reason(self) -> str:
         if self.connecting_active:
@@ -3738,12 +3797,14 @@ class WT5App(tk.Tk):
         for name in names:
             self.detach_session(name)
         self.parking_active = False
+        self.timeout_in_progress = False
         self.park_stop_event.clear()
         self.status_var.set("Parked and disconnected.")
         self.event_log.info("PARK_SUCCESS", antennas=names)
 
     def finish_park_fault(self, message: str) -> None:
         self.parking_active = False
+        self.timeout_in_progress = False
         self.park_stop_event.clear()
         for panel in self.panels.values():
             if panel.session and panel.status_var.get() == "PARKING":
@@ -3848,6 +3909,10 @@ class WT5App(tk.Tk):
             raise RuntimeError("Tracking interval must be 0.1..10.0 seconds.")
         if not (1 <= site.log_retention_days <= 365):
             raise RuntimeError("Log retention must be 1..365 days.")
+        if not (1.0 <= site.timeout_minutes <= 1440.0):
+            raise RuntimeError("Timeout must be 1..1440 minutes.")
+        if site.timeout_action not in ("disconnect", "park_disconnect"):
+            raise RuntimeError("Timeout action must be disconnect or park_disconnect.")
         self._validate_axis_tracking(
             "AZ",
             site.az_track_tolerance_degrees,
@@ -4361,6 +4426,9 @@ class WT5App(tk.Tk):
             az_stop_tolerance=self.site.az_stop_tolerance_degrees,
             el_stop_tolerance=self.site.el_stop_tolerance_degrees,
             log_retention_days=self.site.log_retention_days,
+            timeout_enabled=self.site.timeout_enabled,
+            timeout_minutes=self.site.timeout_minutes,
+            timeout_action=self.site.timeout_action,
             antenna_compensation={
                 name: config.az_low_to_high_compensation for name, config in self.configs.items()
             },
@@ -4388,7 +4456,67 @@ class WT5App(tk.Tk):
             )
         self.status_var.set("Stopped.")
 
+    def check_app_timeout(self) -> None:
+        if not self.site.timeout_enabled or self.timeout_in_progress or self.connecting_active or not self.sessions:
+            return
+        elapsed = time.monotonic() - self.last_user_activity
+        if elapsed < max(60.0, self.site.timeout_minutes * 60.0):
+            return
+        self.timeout_in_progress = True
+        action = self.site.timeout_action
+        self.event_log.warn("APP_TIMEOUT", action=action, timeout_minutes=self.site.timeout_minutes)
+        if action == "park_disconnect":
+            self.timeout_park_disconnect()
+        else:
+            self.timeout_disconnect_only()
+
+    def timeout_park_disconnect(self) -> None:
+        self.scan_stop_event.set()
+        self.yfactor_stop_event.set()
+        self.scan_active = False
+        self.yfactor_active = False
+        self.status_var.set("Timeout: parking antennas.")
+        if self.parking_active:
+            return
+        self.park_all()
+
+    def timeout_disconnect_only(self) -> None:
+        self.status_var.set("Timeout: disconnecting controllers.")
+        self.tracking_stop_event.set()
+        self.park_stop_event.set()
+        self.scan_stop_event.set()
+        self.yfactor_stop_event.set()
+        self.tracking_active = False
+        self.tracking_kind = ""
+        self.scan_active = False
+        self.yfactor_active = False
+        self.parking_active = False
+        self.set_scan_offset(None)
+        self.run_worker(self.timeout_disconnect_work, self.finish_timeout_disconnect, self.finish_timeout_disconnect_fault)
+
+    def timeout_disconnect_work(self) -> list[str]:
+        closed: list[str] = []
+        with self.motion_lock:
+            for name, session in list(self.sessions.items()):
+                session.stop_all()
+                session.close()
+                closed.append(name)
+        return closed
+
+    def finish_timeout_disconnect(self, names: list[str]) -> None:
+        for name in names:
+            self.detach_session(name)
+        self.timeout_in_progress = False
+        self.status_var.set("Timeout: controllers disconnected.")
+        self.event_log.warn("APP_TIMEOUT_DISCONNECT", antennas=names)
+
+    def finish_timeout_disconnect_fault(self, message: str) -> None:
+        self.timeout_in_progress = False
+        self.status_var.set(f"Timeout disconnect fault: {message}")
+        self.event_log.error("APP_TIMEOUT_DISCONNECT_FAULT", error=message)
+
     def periodic_refresh(self) -> None:
+        self.check_app_timeout()
         if not self.tracking_active and not self.parking_active and not self.scan_active and not self.yfactor_active:
             self.refresh_all()
         else:
