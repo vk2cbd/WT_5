@@ -2680,7 +2680,9 @@ class WT5App(tk.Tk):
         target_detail_bar = ttk.Frame(self, padding=(8, 0, 8, 2))
         target_detail_bar.pack(fill="x")
         ttk.Label(target_detail_bar, textvariable=self.target_ha_var).pack(side="left")
-        ttk.Label(target_detail_bar, textvariable=self.timeout_var).pack(side="left", padx=(16, 0))
+        timeout_bar = ttk.Frame(self, padding=(8, 0, 8, 2))
+        timeout_bar.pack(fill="x")
+        ttk.Label(timeout_bar, textvariable=self.timeout_var).pack(side="left")
 
         body = ttk.Frame(self, padding=8)
         body.pack(fill="both", expand=True)
@@ -2813,6 +2815,8 @@ class WT5App(tk.Tk):
             self.attach_session(name, session, update_status=False)
             self.event_log.info("CONNECT_OK", antenna=name)
         if connected_sessions:
+            self.last_user_activity = time.monotonic()
+            self.timeout_in_progress = False
             self.run_worker(
                 lambda names=[name for name, _session in connected_sessions]: self.refresh_connected_oled(names),
                 lambda _result: None,
@@ -4520,6 +4524,12 @@ class WT5App(tk.Tk):
     def update_timeout_display(self) -> None:
         if not self.site.timeout_enabled:
             self.timeout_var.set("Timeout off")
+            return
+        if not self.sessions:
+            self.timeout_var.set("Timeout stopped")
+            return
+        if self.connecting_active:
+            self.timeout_var.set("Timeout starting")
             return
         timeout_seconds = max(60.0, self.site.timeout_minutes * 60.0)
         remaining = max(0.0, timeout_seconds - (time.monotonic() - self.last_user_activity))
